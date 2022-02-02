@@ -132,6 +132,8 @@ The range of maximum storage required goes from 25 KB for 2 bins to 8.2 MB for 1
 
 **Weighted Samples**. Samples may be uniformly weighted (weight = 1) or be assigned separate weights, so that weighted medians and weighted quantiles may be computed.
 
+**Remove Samples**. Samples may be removed and the quantiles will be updated to reflect this. 
+
 **Basic Statistics**. `Quantogram` also provides other basic statistics: 
 
  - **mean**
