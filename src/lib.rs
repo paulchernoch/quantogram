@@ -6,7 +6,7 @@ use skiplist::SkipMap;
 
 /// A bin to be used inside a Histogram with a midpoint value and a weight.
 #[derive(Copy, Clone, Debug)]
-struct HistogramBin {
+pub struct HistogramBin {
     /// Midpoint value for the bin.
     pub sample : f64,
 
@@ -265,7 +265,9 @@ pub struct Quantogram {
     fine_bins : SkipMap<isize, HistogramBin>,
 
     /// Natural Log of the grown factor, precomputed for speed.
-    log_of_growth : f64
+    log_of_growth : f64,
+
+    mode_cache : ModeCache
 }
 
 impl Quantogram {
@@ -310,7 +312,8 @@ impl Quantogram {
             positive_coarse_bins : SkipMap::with_capacity(254),
             negative_coarse_bins : SkipMap::with_capacity(254),
             fine_bins : SkipMap::with_capacity(17641),
-            log_of_growth : growth.ln()
+            log_of_growth : growth.ln(),
+            mode_cache : ModeCache::new()
         };
         q.memoize_growth_bin_power();
         q
@@ -363,7 +366,8 @@ impl Quantogram {
             // If the range is constrained, fewer bins will be required,
             // so the capacity can be reduced. 
             fine_bins : SkipMap::with_capacity(((largest_power - smallest_power + 1)*35 + 1) as usize),
-            log_of_growth : growth.ln()
+            log_of_growth : growth.ln(),
+            mode_cache : ModeCache::new()
         };
         q.memoize_growth_bin_power();
         q
@@ -390,44 +394,47 @@ impl Quantogram {
     /// If the weight is positive, the sample is added, otherwise removed.
     /// If the cumulative weight for the bin holding that sample goes negative, 
     /// the call panics.
-    pub fn add_weighted(&mut self, sample: f64, weight: f64) {
+    pub fn add_weighted(&mut self, sample: f64, weight: f64) -> f64 {
         let bounded_sample = self.over_or_underflow(sample);
+        let adjusted_fine_weight;
+        self.adjust_aggregates(bounded_sample, weight);
         match SampleCategory::categorize(bounded_sample) {
             SampleCategory::Positive => {
-                self.adjust_aggregates(bounded_sample, weight);
                 self.positive_weight += weight;
-                let (fine_key, fine_midpoint) = self.get_fine_key_with_midpoint(bounded_sample, self.growth, self.bins_per_doubling).unwrap();
-                Self::increment_key_weight(&mut self.fine_bins, fine_key, fine_midpoint, sample, weight); 
+                let (fine_key, fine_low, fine_midpoint, fine_high) = self.get_fine_key_with_midpoint(bounded_sample, self.growth, self.bins_per_doubling).unwrap();
+                adjusted_fine_weight = Self::increment_key_weight(&mut self.fine_bins, fine_key, fine_midpoint, sample, weight); 
+                self.adjust_mode(fine_key, fine_low, fine_midpoint, fine_high, adjusted_fine_weight);
                 let (coarse_key, coarse_midpoint) = Self::get_coarse_key_with_midpoint(bounded_sample).unwrap();
                 Self::increment_key_weight(&mut self.positive_coarse_bins, coarse_key, coarse_midpoint, sample, weight);
             },
             SampleCategory::Zero => {
-                self.adjust_aggregates(bounded_sample, weight);
                 self.zero_weight += weight;
-                let (key, midpoint) = self.get_fine_key_with_midpoint(bounded_sample, self.growth, self.bins_per_doubling).unwrap();
-                Self::increment_key_weight(&mut self.fine_bins, key, midpoint, sample, weight); 
+                let (fine_key, fine_low, fine_midpoint, fine_high) = self.get_fine_key_with_midpoint(bounded_sample, self.growth, self.bins_per_doubling).unwrap();
+                adjusted_fine_weight = Self::increment_key_weight(&mut self.fine_bins, fine_key, fine_midpoint, sample, weight); 
+                self.adjust_mode(fine_key, fine_low, fine_midpoint, fine_high, adjusted_fine_weight);
             },
             SampleCategory::Negative => {
-                self.adjust_aggregates(bounded_sample, weight);
                 self.negative_weight += weight;
-                let (fine_key, fine_midpoint) = self.get_fine_key_with_midpoint(bounded_sample, self.growth, self.bins_per_doubling).unwrap();
-                Self::increment_key_weight(&mut self.fine_bins, fine_key, fine_midpoint, sample, weight); 
+                let (fine_key, fine_low, fine_midpoint, fine_high) = self.get_fine_key_with_midpoint(bounded_sample, self.growth, self.bins_per_doubling).unwrap();
+                adjusted_fine_weight = Self::increment_key_weight(&mut self.fine_bins, fine_key, fine_midpoint, sample, weight); 
+                self.adjust_mode(fine_key, fine_low, fine_midpoint, fine_high, adjusted_fine_weight);
                 let (coarse_key, coarse_midpoint) = Self::get_coarse_key_with_midpoint(bounded_sample).unwrap();
                 Self::increment_key_weight(&mut self.negative_coarse_bins, coarse_key, coarse_midpoint, sample, weight);
             },
             SampleCategory::NotANumber => {
-                self.adjust_aggregates(bounded_sample, weight);
                 self.nan_weight += weight;
+                adjusted_fine_weight = self.nan_weight;
             },
             SampleCategory::PositiveInfinity => {
-                self.adjust_aggregates(bounded_sample, weight);
                 self.plus_ininity_weight += weight;
+                adjusted_fine_weight = self.plus_ininity_weight;
             },
             SampleCategory::NegativeInfinity => {
-                self.adjust_aggregates(bounded_sample, weight);
                 self.minus_ininity_weight += weight;
+                adjusted_fine_weight = self.minus_ininity_weight;
             }
         }
+        adjusted_fine_weight
     }
 
     /// Add many samples to the Quantogram, all having a weight of 1.0.
@@ -516,6 +523,25 @@ impl Quantogram {
     /// Return an estimate of the median.
     pub fn median(&self) -> Option<f64> {
         self.quantile(0.5)
+    }
+
+    /// Return an estimate of the mode.
+    /// If no finite samples have been added, returns an empty list. 
+    /// If there are multiple modes tieing with the same weight,
+    /// return all of them in a list.
+    /// If all samples in the collection are integers, round the mode.
+    pub fn mode(&self) -> Vec<f64> {
+        let unrounded_mode = self.mode_cache.mode(&self.fine_bins);
+        if self.only_integers {
+            let rounded_mode = unrounded_mode
+                .into_iter()
+                .map(|x| x.round())
+                .collect();
+            rounded_mode
+        }
+        else {
+            unrounded_mode
+        }
     }
 
     /// Estimate the quantile for the inserted data.
@@ -804,6 +830,18 @@ impl Quantogram {
         }
     }
 
+    fn adjust_mode(
+        &mut self, 
+        bin_key: isize, 
+        bin_low_value: f64, 
+        bin_midpoint: f64, 
+        bin_high_value: f64, 
+        bin_weight: f64) {
+        if bin_midpoint.is_finite() && bin_weight > 0.0 {
+            self.mode_cache.update(bin_key, bin_low_value, bin_high_value, bin_weight);
+        }
+    }
+
     /// Update bin weight for given key, or create new bin for key if none exists.
     /// Returns the updated weight.
     fn increment_key_weight(map: &mut SkipMap<isize, HistogramBin>, key: isize, bucket_sample: f64, accurate_sample: f64, added_weight: f64) -> f64 {
@@ -936,8 +974,8 @@ impl Quantogram {
     ///     sign  = 1 for positive numbers, -1 for negative numbers. 
     /// Zeroes are always stored at key = 0.
     /// ```
-    /// Returns a Tuple with the bin key and the midpoint value for the bin. 
-    fn get_fine_key_with_midpoint(&self, sample: f64, growth: f64, bins_per_doubling: usize) -> Option<(isize,f64)> {
+    /// Returns a Tuple with the bin key and the low, mid, and high point values for the bin. 
+    fn get_fine_key_with_midpoint(&self, sample: f64, growth: f64, bins_per_doubling: usize) -> Option<(isize,f64,f64,f64)> {
         match Self::sign_power_remainder(sample) {
             Some((sign, power, remainder)) => {
                 // Use of system log is more accurate but slower. 
@@ -952,11 +990,11 @@ impl Quantogram {
                 let bucket_low = two_power * self.growth_bin_power_memo[bin as usize]; // Memo of: f64::powi(growth, bin as i32);
                 let bucket_high = bucket_low * growth;
                 let bucket_middle = (sign as f64) * (bucket_low + bucket_high) / 2.0;
-                Some((key, bucket_middle))
+                Some((key, bucket_low, bucket_middle, bucket_high))
             },
             _ => { 
                 if sample == 0.0 {
-                    Some((0, 0.0))
+                    Some((0, 0.0, 0.0, 0.0))
                 }
                 else {
                     None
@@ -1217,6 +1255,107 @@ impl QuantogramBuilder {
     }
 }
 
+#[derive(Copy, Clone, Debug)]
+pub struct BinInfo {
+    pub bin_key : isize,
+    pub bin_low_value : f64,
+    pub bin_high_value : f64,
+    pub bin_weight : f64
+}
+
+impl BinInfo {
+    pub fn bin_width(&self) -> f64 {
+        self.bin_high_value - self.bin_low_value
+    }
+
+    /// Fetch the weight of the indicated bin, or zero if it does not exist.
+    pub fn get_key_weight(map: &SkipMap<isize, HistogramBin>, key: isize) -> f64 {
+        match map.get(&key) {
+            Some(bucket) => bucket.weight,
+            None => 0.0
+        }
+    }
+
+    /// Estimate the mode of grouped data using the weights of
+    /// the bins immediately below and above.
+    /// If those bins are empty, it just takes the midpoint of this bin. 
+    /// 
+    /// ```text
+    ///               /   f1 - f0     \
+    ///   Mode = L + |-----------------| h
+    ///               \ 2f1 - f0 - f2 /
+    /// 
+    ///   where:
+    ///      L is the lower limit of the modal class
+    ///      h is the size of the class interval
+    ///      f1 is the frequency of the modal class
+    ///      f0 is the frequency of the class preceding the modal class
+    ///      f2 is the frequency of the class succeeding the modal class
+    /// ```
+    pub fn mode_of_grouped_data(&self, bins: &SkipMap<isize, HistogramBin>) -> f64 {
+        let f1 = self.bin_weight;
+        let f0 = Self::get_key_weight(bins, self.bin_key - 1);
+        let f2 = Self::get_key_weight(bins, self.bin_key + 1);
+        let h = self.bin_width();
+        let l = self.bin_low_value;
+        let mode = l + h*(f1 - f0)/(2.0 * f1 - f0 - f2);
+        mode
+    }
+}
+
+/// Maintain a cache of potential Mode values.
+pub struct ModeCache {
+    modal_classes : Vec<BinInfo>,
+    weight : f64
+}
+
+impl ModeCache {
+    pub fn new() -> Self {
+        ModeCache {
+            modal_classes: Vec::new(),
+            weight : 0.0
+        }
+    }
+
+    /// Attempt to update the ModeCache with a new candidate for Mode. 
+    /// Return false if no change was made to the mode estimate. 
+    pub fn update(&mut self, bin_key : isize,
+        bin_low_value : f64,
+        bin_high_value : f64,
+        bin_weight : f64) -> bool {
+        let bin = BinInfo { 
+            bin_key : bin_key,
+            bin_low_value : bin_low_value,
+            bin_high_value : bin_high_value,
+            bin_weight : bin_weight
+        };
+        if self.weight < bin_weight {
+            self.modal_classes = vec![bin];
+            self.weight = bin_weight;
+            true
+        }
+        else if self.weight == bin_weight {
+            // A multi-modal collection of samples.
+            self.modal_classes.push(bin);
+            true
+        }
+        else {
+            false
+        }
+    }
+
+    /// Return a list of all modes among the samples. 
+    /// If no samples have been added, the list is empty.
+    pub fn mode(&self, bins: &SkipMap<isize, HistogramBin>) -> Vec<f64> {
+        let mut modes = Vec::new();
+        for bin in self.modal_classes.iter() {
+            let mode_estimate = bin.mode_of_grouped_data(bins);
+            modes.push(mode_estimate);
+        }
+        modes
+    }
+}
+
 #[cfg(test)]
 mod tests {
     // Note this useful idiom: importing names from outer (for mod tests) scope.
@@ -1311,6 +1450,22 @@ mod tests {
 
     #[test]
     fn test_mean() { assert_eq!(gapped_quantogram().mean().unwrap(), 50.0); }
+
+    #[test]
+    fn test_mode_unimodal() { 
+        let mut q = Quantogram::new();
+        let data = vec![1.0,2.0,3.0,3.0,4.0,4.0,4.0,5.0,6.0];
+        q.add_unweighted_samples(data.iter());
+        assert_eq!(q.mode(), vec![4.0]); 
+    }
+
+    #[test]
+    fn test_mode_multimodal() { 
+        let mut q = Quantogram::new();
+        let data = vec![1.0,2.0,3.0,3.0,3.0,4.0,4.0,4.0,5.0,6.0];
+        q.add_unweighted_samples(data.iter());
+        assert_eq!(q.mode(), vec![3.0,4.0]); 
+    }
 
     #[test]
     fn test_count() { 

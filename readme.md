@@ -134,18 +134,32 @@ The range of maximum storage required goes from 25 KB for 2 bins to 8.2 MB for 1
 
 **Remove Samples**. Samples may be removed and the quantiles will be updated to reflect this. 
 
+*Warning*: If the minimum or maximum value is removed, subsequent requests for the minimum or maximum (until a new extreme sample is added) may return an incorrect value. 
+
 **Basic Statistics**. `Quantogram` also provides other basic statistics: 
 
- - **mean**
  - **min**
  - **max**
+ - **mean**
+ - **mode**
  - **count**
+
+*Notes*: 
+
+ 1. If only integer values are collected, the `mode` will be rounded to the nearest integer.
+ 2. If integer values in the range [-63,63] are used, a good value for mode will result. 
+ 3. If non-integer values are collected or integers outside this range, then the effect of non-uniform histogram bin widths will distort the `mode` and the anwswer will not be what you expect. Bins vary in size exponentially, so the `mode` will act like the mode of the log of the samples. This will skew the `mode` toward larger values, as larger numbers are part of larger bins.
+ 4. Most rules of thumb related to the use of histograms to estimate the mode (like **Sturges' Rule** and **Scott's Rule**) use bin counts that are much lower than what is used by `Quantogram`. It might be better to rebin by consolidating multiple adjacent bins in order to compute the `mode`. 
 
 **Exceptional Values**. Infinities and NANs are counted separately and do not factor into the quantile calculation. The proportion of such values may be queried.
 
 **Overflow and Underflow**. If infinitesmal values are not ineresting, the underflow value may be changed to treat values smaller than a threshold as zeroes. Likewise, an upper threshold may be set and all values larger in magnitude are considered infinities (positive or negative).
 
 By compressing the dynamic range of recorded values, less storage is required and performance is enhanced.
+
+**Special handling of Integers**. So long as only integers (samples with no fractional component) are added to the collection, requests for a quantile will round to the nearest integer.
+
+**Exact values for sparse bins**. If only one value has been added to a certain bin, instead of the midpoint between the bin's lower and upper value being used, the exact sample value will be used.
 
 ## Categorizing the Quantogram Algorithm
 
@@ -172,9 +186,9 @@ Summaries are stored at three levels, enabling the algorithm to quickly home in 
  - Middle level: coarse counts, one for negatives and one for positives, to the nearest power of two
  - Bottom level: fine counts for all finite values
 
-The coarse and fine counts are stored in `skip dictionaries` (dictionaries built upon a `skip list`). They are a tree-structured index into a linked list, where keys are stored in sorted order. This makes search, insert, update and ordered iteration fast. 
+The coarse and fine counts are stored in `skip maps` (dictionaries built upon a `skip list`). They are a tree-structured index into a linked list, where keys are stored in sorted order. This makes search, insert, update and ordered iteration fast. 
 
-By using the coarse counts in the middle level, one can sum up the weights to get near the quantile and discover which power of two range contains the quantile. Then the skip dictionary's filtered iterator provides rapid access to that range of values in the fine dictionary.
+By using the coarse counts in the middle level, one can sum up the weights to get near the quantile and discover which power of two range contains the quantile. Then the skip map's filtered iterator provides rapid access to that range of values in the fine dictionary.
 
 **Fast hashing**. An important part of the algorithm is how samples are hashed to find their keys at the coarse and fine levels. At the coarse level, `frexp` is used to get the power of two and sign of the number, using an intrinsic math function instead of the math library log. At the fine level, the remaining mantissa is fed to an approximate log function to get the bin number. The approximate log uses a third-order **Padé Approximant**, which is twice as fast as the math library log.
 
@@ -188,5 +202,5 @@ The insertion heavy scenario strongly favors the naive algorithm, because insert
 
 **Quantile Heavy**. 20,000 random values were added to a naive list and a `Quantogram`, with a median taken after each insertion. In release mode, the `Quantogram` was 65x faster than the naive approach. As the number of samples increases, this ratio should improve further.
 
-Profiling reveals that the bulk of the time is spent performing operations on the `SkipDictionary`.
+Profiling reveals that the bulk of the time is spent performing operations on the `SkipMap`.
 
