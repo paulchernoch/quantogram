@@ -1,0 +1,19 @@
+[package]
+name = "quantogram"
+version = "0.1.0"
+description = "Approximate quantiles using histograms with logarithmically sized bins to guarantee worst case absolute relative error."
+keywords = ["quantile", "median", "statistics", "approximation"]
+categories = ["mathematics"]
+authors = ["PaulChernoch <paul.chernoch@yahoo.com>"]
+edition = "2018"
+license-file = "./license.txt"
+license = "MIT"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+float_extras = "0.1"
+skiplist = "*"
+
+[profile.release]
+debug = true
