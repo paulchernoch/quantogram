@@ -902,7 +902,11 @@ impl Quantogram {
         // TODO: Add a configuration parameter here and in QuantogramBuilder
         // to enable/disable mode calculations. 
         // It is a drag on performance and not all callers need the mode.
-        if bin_midpoint.is_finite() && bin_weight > 0.0 {
+
+        // NOTE: Do not update the mode if the weight is 1. 
+        // Otherwise if all values are distinct (common in unit tests)
+        // then you store a huge list of modes. This kills performance, too.
+        if bin_midpoint.is_finite() && bin_weight > 0.0 && bin_weight != 1.0 {
             self.mode_cache.update(bin_key, bin_low_value, bin_high_value, bin_weight);
         }
     }
@@ -1694,7 +1698,7 @@ mod tests {
         let long_ratio = (long_quant_time as f64) / (long_naive_time as f64);
         println!("Short Ratio: {}  Long ratio: {}", short_ratio, long_ratio);
         // assert!(false);
-        assert!(short_ratio > long_ratio);
+        assert!(short_ratio > 1.4 * long_ratio);
     }
 
     #[test]
@@ -1707,7 +1711,7 @@ mod tests {
         let long_ratio = (long_quant_time as f64) / (long_naive_time as f64);
         println!("Short Ratio: {}  Long ratio: {}", short_ratio, long_ratio);
         // assert!(false);
-        assert!(short_ratio > 6.0 * long_ratio);
+        assert!(short_ratio > 8.0 * long_ratio);
     }
 
     #[test]
