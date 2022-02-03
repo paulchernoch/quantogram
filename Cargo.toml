@@ -14,7 +14,7 @@ license-file = "./license.txt"
 
 [dependencies]
 float_extras = "0.1"
-skiplist = "*"
+skiplist = "0.4"
 
 [profile.release]
 debug = true
