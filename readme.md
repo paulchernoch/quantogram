@@ -8,6 +8,15 @@
   - default accuracy = 1.0%
   - highest accuracy = 0.034%
 
+## Installation
+
+Add this to your Cargo.toml:
+```
+[dependencies]
+quantogram = "0.1"
+```
+then you are good to go.
+
 ## Usage
 
 The default configuration is adequate for most uses and promises a 1% worst-case error rate.
@@ -136,11 +145,13 @@ The range of maximum storage required goes from 25 KB for 2 bins to 8.2 MB for 1
 
 *Warning*: If the minimum or maximum value is removed, subsequent requests for the minimum or maximum (until a new extreme sample is added) may return an incorrect value. 
 
-**Basic Statistics**. `Quantogram` also provides other basic statistics: 
+**Implemented Statistics**. `Quantogram` provides these basic statistics: 
 
  - **min**
  - **max**
  - **mean**
+ - **median**
+ - **quantile**
  - **mode**
  - **count**
 
@@ -150,6 +161,8 @@ The range of maximum storage required goes from 25 KB for 2 bins to 8.2 MB for 1
  2. If integer values in the range [-63,63] are used, a good value for mode will result. 
  3. If non-integer values are collected or integers outside this range, then the effect of non-uniform histogram bin widths will distort the `mode` and the anwswer will not be what you expect. Bins vary in size exponentially, so the `mode` will act like the mode of the log of the samples. This will skew the `mode` toward larger values, as larger numbers are part of larger bins.
  4. Most rules of thumb related to the use of histograms to estimate the mode (like **Sturges' Rule** and **Scott's Rule**) use bin counts that are much lower than what is used by `Quantogram`. It might be better to rebin by consolidating multiple adjacent bins in order to compute the `mode`. 
+
+**Inverse Quantile**. Lookup the quantile at which a given value falls using the `quantile_at` function.
 
 **Exceptional Values**. Infinities and NANs are counted separately and do not factor into the quantile calculation. The proportion of such values may be queried.
 
