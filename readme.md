@@ -189,7 +189,7 @@ Measuring quantiles of streams of data (such as the median) is an essential basi
 
 **Sorted list**. The second includes the naive approach, which is to gather all the data in a list, then sort it to get the quantile. To expedite, you can use **quickselect** so that you do not need to sort all the data. This approach does not work for streaming data, because the storage requirements are vast. 
 
-**Probabilistic**. The third category has algorithms (such as variations on **Count Min Sketch**) that quarantee a given accuracy with a certain probability. A popular median estimator is called **Median of Medians**. If you know how many items N there will be, you can use **reservoir sampling** to maintain a sample set of the data and take the median of that. However, the more extreme your quantile, the larger a subset you must keep. With these algorithms, you usually get a good estimate, but there is always a chance that you get a bad estimate. Also, given the same set of data, you may get different results; the answer is not deterministic.
+**Probabilistic**. The third category has algorithms (such as variations on **Count Min Sketch**) that guarantee a given accuracy with a certain probability. A popular median estimator is called **Median of Medians**. If you know how many items N there will be, you can use **reservoir sampling** to maintain a sample set of the data and take the median of that. However, the more extreme your quantile, the larger a subset you must keep. With these algorithms, you usually get a good estimate, but there is always a chance that you get a bad estimate. Also, given the same set of data, you may get different results; the answer is not deterministic.
 
 **Sparse Histogram**. Sparse histograms can be used to reduce the storage requirements in comparison to dense histograms when large numbers of distinct samples must be handled. The reduction in storage is offset by greater expense in storage, retrieval and update. There are clever balanced tree structures that can be used for this, but some are complicated to implement. The strategy you use for sizing your bins affects the accuracy of the results. If logarithmically sized bins are used, you can guarantee the worst case absolute relative error will not exceed what is desired. **Quantogram** falls into this category. It is deterministic and has precise guarantees for worst case accuracy, not probabilistic ones.
 
@@ -280,3 +280,19 @@ test bench_median_200000_qg   ... bench:  64,630,098 ns/iter (+/- 8,511,129)
 ```
 
 Note: Why is this use benchmark fair? A typical application will receive sensor data and then respond to it. The response requires that you compare the value to a quantile to see if it is an outlier requiring action, such as the sending of an alert. Thus calling the `median` or `quantile` method after each sample arrives is a typical use case.
+
+## Known Issues & Limitation
+
+1. If samples are removed, several measures can become corrupted:
+
+  - **min** (if the current minimum value is removed)
+  - **max** (if the current maximum value is removed)
+  - **mode** (if a member of the list of current modes is removed)
+
+All other measures will adapt correctly. These defects can be fixed.
+
+2. The **mode** is distorted by the logarithmic size of bins. This has a tendency to cause the **mode** to increase. A mathematically sound correction is needed and could be implemented. Anyone know stats theory?
+
+3. No measure for a running, **weighted standard deviation** is provided. This is planned for a future version.
+
+4. `quantile_at` inverse quantile measure could be further optimized to make use of the coarse bins. For 1% accuracy (35 bins per doubling), the speedup would likely be 15x in the average case.
