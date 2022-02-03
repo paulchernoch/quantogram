@@ -5,7 +5,7 @@ description = "Approximate quantiles using histograms with logarithmically sized
 keywords = ["quantile", "median", "statistics", "approximation"]
 categories = ["mathematics"]
 authors = ["PaulChernoch <paul.chernoch@yahoo.com>"]
-edition = "2018"
+edition = '2021'
 license-file = "./license.txt"
 license = "MIT"
 
@@ -17,3 +17,13 @@ skiplist = "*"
 
 [profile.release]
 debug = true
+
+[dev-dependencies]
+zw-fast-quantile = "0.2"
+bencher = "0.1"
+quantiles = "0.7"
+
+
+[[bench]]
+name = "quantiles"
+harness = false

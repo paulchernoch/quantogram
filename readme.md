@@ -17,6 +17,8 @@ quantogram = "0.1"
 ```
 then you are good to go.
 
+The library requires Rust's 2021 edition, but only so that it can run benchmarks against the `zw-fast-quantile` library, which requires that version. You could build from source and remove the benchmarks related to ZW if you need the 2018 edition.
+
 ## Usage
 
 The default configuration is adequate for most uses and promises a 1% worst-case error rate.
@@ -217,3 +219,64 @@ The insertion heavy scenario strongly favors the naive algorithm, because insert
 
 Profiling reveals that the bulk of the time is spent performing operations on the `SkipMap`.
 
+**Comparison to Other Crates**
+
+The `quantiles` Crate has an implementation of the algorithm from **Cormode, Korn, Muthukrishnan, and Srivastava's** paper "Effective Computation of Biased Quantiles over Data Streams". 
+
+The `zw-fast-quantile` crate implements the **Zhang Wang Fast Approximate Quantiles Algorithm**.
+
+All are tuned to an error of 1%.
+
+**Scenario #1: Query with each insertion**
+
+  - `Quantogram` grows linearly with the number of insertions and quantile requests
+  - CKMS seems to grow as **N Log N**.
+  - By the time you reach 50,000 insertions and queries, `Quantogram` is 30x faster than CKMS. 
+  - The `zw-fast-quantile` readme advertises that it is faster than `CKMS`, but my benchmarking shows it is 4x slower for 1,000 samples and 10x slower than `CKMS` for 10,000 samples. Compared to `Quantogram`, `ZW` is 7.5x slower at 1,000 samples and 118x slower at 50,000 samples.
+
+Quantogram is much faster than either competing crate at querying, and as the volume of data increases, the disparity grows.
+
+**Scenario #2: Insertion Alone**
+
+`Quantogram` falls between ZW and CKMS for insertion speed, but the ZW advantage declines as the sample count increases. At 100,000 samples, the ratio is Quantogram being 2.26x slower than ZW, which is comparable to results for inserting into a list with the naive case.
+
+**Conclusion:**
+
+`Quantogram` scales gracefully as the number of samples increases, which neither of the other two crates do. ZW's speed at insertion is more than offset by poor performance at querying. 
+
+Furthermore, ZW cannot handle floats directly. You must wrap them in an Ordered struct to be able to use them in its collection.
+
+
+```
+> cargo bench
+...
+
+test bench_insert_010000_qg   ... bench:   1,480,556 ns/iter (+/- 180,118)
+test bench_insert_010000_ckms ... bench:   7,382,904 ns/iter (+/- 641,343)
+test bench_insert_010000_zw   ... bench:     411,049 ns/iter (+/- 37,984)
+
+test bench_insert_050000_qg   ... bench:   6,046,822 ns/iter (+/- 539,280)
+test bench_insert_050000_ckms ... bench: 111,633,379 ns/iter (+/- 7,329,546)
+test bench_insert_050000_zw   ... bench:   2,650,721 ns/iter (+/- 254,070)
+
+test bench_insert_100000_qg   ... bench:  12,428,788 ns/iter (+/- 3,226,464)
+test bench_insert_100000_ckms ... bench: 319,816,711 ns/iter (+/- 28,905,190)
+test bench_insert_100000_zw   ... bench:   5,482,642 ns/iter (+/- 818,317)
+
+test bench_median_001000_qg   ... bench:     495,842 ns/iter (+/- 95,352)
+test bench_median_001000_ckms ... bench:     925,006 ns/iter (+/- 85,291)
+test bench_median_001000_zw   ... bench:   3,809,463 ns/iter (+/- 638,667)
+
+test bench_median_010000_qg   ... bench:   3,432,471 ns/iter (+/- 537,084)
+test bench_median_010000_ckms ... bench:  37,458,360 ns/iter (+/- 4,065,758)
+test bench_median_010000_zw   ... bench: 402,043,003 ns/iter (+/- 23,352,903)
+
+test bench_median_050000_qg   ... bench:  16,643,795 ns/iter (+/- 1,661,630)
+test bench_median_050000_ckms ... bench: 486,418,844 ns/iter (+/- 29,388,213)
+
+test bench_median_100000_qg   ... bench:  32,615,356 ns/iter (+/- 6,294,536)
+test bench_median_200000_qg   ... bench:  64,630,098 ns/iter (+/- 8,511,129)
+
+```
+
+Note: Why is this use benchmark fair? A typical application will receive sensor data and then respond to it. The response requires that you compare the value to a quantile to see if it is an outlier requiring action, such as the sending of an alert. Thus calling the `median` or `quantile` method after each sample arrives is a typical use case.

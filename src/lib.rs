@@ -1734,5 +1734,6 @@ mod tests {
         q.remove(20.0);
         assert_eq!(q.mean().unwrap(), 40.0);
     }
+
 }
 
