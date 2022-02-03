@@ -283,7 +283,7 @@ test bench_median_200000_qg   ... bench:  64,630,098 ns/iter (+/- 8,511,129)
 
 Note: Why is this use benchmark fair? A typical application will receive sensor data and then respond to it. The response requires that you compare the value to a quantile to see if it is an outlier requiring action, such as the sending of an alert. Thus calling the `median` or `quantile` method after each sample arrives is a typical use case.
 
-## Known Issues & Limitation
+## Known Issues & Limitations
 
 1. If samples are removed, several measures can become corrupted:
 
