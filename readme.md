@@ -2,7 +2,7 @@
 
 ## A library for Estimating Online Quantiles of Streams
 
-`Quantogram` accepts a stream of floating point numbers (`f64`) and estimates the desired **quantile**, such as the **median**. The caller may tradeoff storage and accuracy. The caller may choose the desired absolute relative error:
+`Quantogram` accepts a stream of floating point numbers (`f64`) with optional weights and estimates the desired **quantile**, such as the **median**, as well as providing other common measures like **count**, **min**, **max**, **mean** and **mode**. The caller may tradeoff storage and accuracy by choosing the desired absolute relative error from this range:
 
   - lowest accuracy = 17.2%
   - default accuracy = 1.0%
@@ -127,6 +127,7 @@ The maximum storage requirement is approximately this (setting aside a few confi
 
 ```
 storage = (2 x 8-byte floats) x (2 x 254 x (bins + 1) + 7)
+        ≈ 8 kb x (bins + 1)
 ```
 
 The 2 x 254 has 2 for positive and negative values and 254 for the number of powers of two between the smallest and largest magnitude numbers supported by 64-bit floats. The bins + 1 is because there are two histograms, a coarse histogram that just collects one count for the nearest power of two and a fine histogram that divides each power of two into `bins` separate counts.
@@ -231,7 +232,7 @@ All are tuned to an error of 1%.
 
   - `Quantogram` grows linearly with the number of insertions and quantile requests
   - CKMS seems to grow as **N Log N**.
-  - By the time you reach 50,000 insertions and queries, `Quantogram` is 30x faster than CKMS. 
+  - By the time you reach 50,000 insertions and queries, `Quantogram` is 30x faster than CKMS and 489x faster than ZW. 
   - The `zw-fast-quantile` readme advertises that it is faster than `CKMS`, but my benchmarking shows it is 4x slower for 1,000 samples and 10x slower than `CKMS` for 10,000 samples. Compared to `Quantogram`, `ZW` is 7.5x slower at 1,000 samples and 118x slower at 50,000 samples.
 
 Quantogram is much faster than either competing crate at querying, and as the volume of data increases, the disparity grows.
@@ -271,8 +272,9 @@ test bench_median_010000_qg   ... bench:   3,432,471 ns/iter (+/- 537,084)
 test bench_median_010000_ckms ... bench:  37,458,360 ns/iter (+/- 4,065,758)
 test bench_median_010000_zw   ... bench: 402,043,003 ns/iter (+/- 23,352,903)
 
-test bench_median_050000_qg   ... bench:  16,643,795 ns/iter (+/- 1,661,630)
-test bench_median_050000_ckms ... bench: 486,418,844 ns/iter (+/- 29,388,213)
+test bench_median_050000_qg   ... bench:  15,898,549 ns/iter (+/- 1,154,243)
+test bench_median_050000_ckms ... bench: 491,125,737 ns/iter (+/- 18,854,159)
+test bench_median_050000_zw   ... bench: 7,775,610,481 ns/iter (+/- 361,052,767)
 
 test bench_median_100000_qg   ... bench:  32,615,356 ns/iter (+/- 6,294,536)
 test bench_median_200000_qg   ... bench:  64,630,098 ns/iter (+/- 8,511,129)
