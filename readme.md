@@ -19,6 +19,11 @@ then you are good to go.
 
 The library requires Rust's 2021 edition, but only so that it can run benchmarks against the `zw-fast-quantile` library, which requires that version. You could build from source and remove the benchmarks related to ZW if you need the 2018 edition.
 
+## Release Notes
+
+See the change log for changes: 
+[Change log](./changelog.md)
+
 ## Usage
 
 The default configuration is adequate for most uses and promises a 1% worst-case error rate.
@@ -154,16 +159,19 @@ The range of maximum storage required goes from 25 KB for 2 bins to 8.2 MB for 1
  - **max**
  - **mean**
  - **median**
+ - **variance**
+ - **standard deviation**
  - **quantile**
  - **mode**
  - **count**
 
 *Notes*: 
 
- 1. If only integer values are collected, the `mode` will be rounded to the nearest integer.
- 2. If integer values in the range [-63,63] are used, a good value for mode will result. 
- 3. If non-integer values are collected or integers outside this range, then the effect of non-uniform histogram bin widths will distort the `mode` and the anwswer will not be what you expect. Bins vary in size exponentially, so the `mode` will act like the mode of the log of the samples. This will skew the `mode` toward larger values, as larger numbers are part of larger bins.
- 4. Most rules of thumb related to the use of histograms to estimate the mode (like **Sturges' Rule** and **Scott's Rule**) use bin counts that are much lower than what is used by `Quantogram`. It might be better to rebin by consolidating multiple adjacent bins in order to compute the `mode`. 
+ 1. The standard deviation (stddev) calculates the population standard deviation, not the sample standard deviation.
+ 2. If only integer values are collected, the `mode` will be rounded to the nearest integer.
+ 3. If integer values in the range [-63,63] are used, a good value for mode will result. 
+ 4. If non-integer values are collected or integers outside this range, then the effect of non-uniform histogram bin widths will distort the `mode` and the anwswer will not be what you expect. Bins vary in size exponentially, so the `mode` will act like the mode of the log of the samples. This will skew the `mode` toward larger values, as larger numbers are part of larger bins.
+ 5. Most rules of thumb related to the use of histograms to estimate the mode (like **Sturges' Rule** and **Scott's Rule**) use bin counts that are much lower than what is used by `Quantogram`. It might be better to rebin by consolidating multiple adjacent bins in order to compute the `mode`. 
 
 **Inverse Quantile**. Lookup the quantile at which a given value falls using the `quantile_at` function.
 
@@ -290,11 +298,15 @@ Note: Why is this use benchmark fair? A typical application will receive sensor 
   - **min** (if the current minimum value is removed)
   - **max** (if the current maximum value is removed)
   - **mode** (if a member of the list of current modes is removed)
+  - **variance**
+  - **standard deviation** (works in unit test, but perverse failure cases may exist)
 
 All other measures will adapt correctly. These defects can be fixed.
 
-2. The **mode** is distorted by the logarithmic size of bins. This has a tendency to cause the **mode** to increase. A mathematically sound correction is needed and could be implemented. Anyone know stats theory?
+1. The **mode** is distorted by the logarithmic size of bins. This has a tendency to cause the **mode** to increase. A mathematically sound correction is needed and could be implemented. Anyone know stats theory?
 
-3. No measure for a running, **weighted standard deviation** is provided. This is planned for a future version.
+2. `quantile_at` inverse quantile measure could be further optimized to make use of the coarse bins. For 1% accuracy (35 bins per doubling), the speedup would likely be 15x in the average case.
+   
+3. Weighted mean, variance and standard deviation caclulations are not protected against overflow. 
 
-4. `quantile_at` inverse quantile measure could be further optimized to make use of the coarse bins. For 1% accuracy (35 bins per doubling), the speedup would likely be 15x in the average case.
+4. If many values have the same weight (that differs from one, a case that is handled) then the `ModeCache` can consume an unbounded amount of memory.

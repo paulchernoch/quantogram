@@ -1,6 +1,6 @@
 [package]
 name = "quantogram"
-version = "0.1.0"
+version = "0.2.0"
 description = "Approximate quantiles using histograms with logarithmically sized bins to guarantee worst case absolute relative error."
 keywords = ["quantile", "median", "statistics", "approximation"]
 categories = ["mathematics"]
@@ -23,7 +23,6 @@ debug = true
 zw-fast-quantile = "0.2"
 bencher = "0.1"
 quantiles = "0.7"
-
 
 [[bench]]
 name = "quantiles"

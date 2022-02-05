@@ -1,6 +1,7 @@
 use std::ops::Bound::{Included,Excluded};
 use std::fmt::{Formatter,Debug,Result};
 use float_extras::f64::frexp;
+use std::convert::Into;
 use skiplist::SkipMap;
 
 
@@ -193,6 +194,9 @@ pub struct Quantogram {
     /// This permits the exact weighted mean to be calculated.
     weighted_sum : f64,
 
+    /// Running weighted variance
+    running_variance : f64,
+
     /// Total weight of all inserted NAN values. 
     nan_weight : f64,
 
@@ -267,6 +271,7 @@ pub struct Quantogram {
     /// Natural Log of the grown factor, precomputed for speed.
     log_of_growth : f64,
 
+    /// Cache of mode candidates for computing the mode.
     mode_cache : ModeCache
 }
 
@@ -291,6 +296,7 @@ impl Quantogram {
             total_count : 0,
             total_weight : 0.0,
             weighted_sum : 0.0,
+            running_variance : 0.0,
             nan_weight : 0.0, 
             plus_ininity_weight : 0.0,
             minus_ininity_weight : 0.0,
@@ -324,7 +330,7 @@ impl Quantogram {
     ///   - Inserted values having absolute magnitude below 2^smallest_power will be treated as zeroes.
     ///   - Inserted values having absolute magnitude above 2^largest_power will be treated as infinities.
     /// 
-    /// Note: To ensure that consist values for growth and bions are set, it is advised to use QuantogramBuilder 
+    /// Note: To ensure that consist values for growth and bins are set, it is advised to use QuantogramBuilder 
     ///       instead of directly calling this constructor.
     pub fn with_configuration(growth: f64, bins: usize, smallest_power: isize, largest_power: isize) -> Self {
         let valid_power = -126..=127;
@@ -343,6 +349,7 @@ impl Quantogram {
             total_count : 0,
             total_weight : 0.0,
             weighted_sum : 0.0,
+            running_variance : 0.0,
             nan_weight : 0.0, 
             plus_ininity_weight : 0.0,
             minus_ininity_weight : 0.0,
@@ -438,9 +445,11 @@ impl Quantogram {
     }
 
     /// Add many samples to the Quantogram, all having a weight of 1.0.
-    pub fn add_unweighted_samples<'a>(&mut self, samples: impl Iterator<Item = &'a f64>) {
+    pub fn add_unweighted_samples<'a, S>(&mut self, samples: impl Iterator<Item = &'a S>) 
+    where S: 'a + Into<f64> + Copy
+    {
         for sample in samples {
-            self.add(*sample);
+            self.add((*sample).into());
         }
     }
 
@@ -523,6 +532,21 @@ impl Quantogram {
     /// Return an estimate of the median.
     pub fn median(&self) -> Option<f64> {
         self.quantile(0.5)
+    }
+
+    /// Exact weighted variance of all added finite values.
+    pub fn variance(&self) -> f64 {
+        self.running_variance
+    }
+
+    /// Exact weighted population standard deviation of all added finite values.
+    pub fn stddev(&self) -> Option<f64> {
+        if self.total_weight <= 0.0 {
+            None
+        }
+        else {
+            Some((self.running_variance / self.total_weight).sqrt())
+        }
     }
 
     /// Return an estimate of the mode.
@@ -838,8 +862,11 @@ impl Quantogram {
             self.total_count += 1;
         }
         if sample_is_finite && weight_is_finite {
+            let previous_mean = self.mean().unwrap_or_default();
             self.total_weight += weight;
             self.weighted_sum += weight * sample;
+            let current_mean = self.mean().unwrap_or_default();
+            self.running_variance += weight * (sample - previous_mean) * (sample - current_mean);
         }
 
         if sample_is_finite && sample.fract() != 0.0 {
@@ -1096,7 +1123,7 @@ impl Debug for Quantogram {
 
         write!(f, "Quantogram.
           growth = {}, bins per doubling = {}
-          total count = {}, weight = {}, sum = {}
+          total count = {}, weight = {}, sum = {}, variance = {:.3},
           NAN = {}, -Inf = {}, +Inf = {}, Integers? = {}
           - = {}, 0 = {}, + = {}
           min = {}, mean = {:?}, max = {}
@@ -1108,6 +1135,7 @@ impl Debug for Quantogram {
         ", 
             self.growth, self.bins_per_doubling,
             self.total_count, self.total_weight, self.weighted_sum,
+            self.running_variance,
             self.nan_weight, self.minus_ininity_weight, self.plus_ininity_weight, self.only_integers,
             self.negative_weight, self.zero_weight, self.positive_weight,
             self.minimum, self.mean(), self.maximum,
@@ -1433,6 +1461,11 @@ mod tests {
     use super::*;
     use std::time::{Instant};
 
+    fn assert_close(x: f64, y: f64, epsilon: f64) {
+        let delta = (x - y).abs();
+        assert!(delta <= epsilon);
+    }
+
     /// Test data with a gap.
     fn gapped_quantogram() -> Quantogram {
         let mut q = Quantogram::new();
@@ -1546,6 +1579,48 @@ mod tests {
 
     #[test]
     fn test_median() { assert_eq!(gapped_quantogram().median().unwrap(), 5.0); }
+
+
+    #[test]
+    fn test_unweighted_standard_deviation() { 
+        let mut q = Quantogram::new();
+
+        q.add_unweighted_samples(vec![
+            85, 86, 100, 76, 81, 93, 84, 99, 71, 69, 93, 85, 81, 87, 89
+        ].iter());
+
+        let expected_stddev = 8.698403429493382;
+        assert_close(q.stddev().unwrap(), expected_stddev, 0.00000000001);
+    }
+
+    #[test]
+    fn test_weighted_standard_deviation() { 
+        let mut q = Quantogram::new();
+
+        q.add_unweighted_samples(vec![
+            86, 100, 76, 93, 84, 99, 71, 69, 93, 87, 89
+        ].iter());
+        q.add_weighted(85.0, 2.0);
+        q.add_weighted(81.0, 2.0);
+
+        let expected_stddev = 8.69840342949338;
+        assert_close(q.stddev().unwrap(), expected_stddev, 0.00000000001);
+    }
+
+    /// Removing values may mess up the standard deviation, but this case passes.
+    #[test]
+    fn test_unweighted_standard_deviation_with_remove() { 
+        // Include spurious values of 123 and 150, then remove them. 
+        let mut q = Quantogram::new();
+        q.add_unweighted_samples(vec![
+            123, 150, 85, 86, 100, 76, 81, 93, 84, 99, 71, 69, 93, 85, 81, 87, 89
+        ].iter());
+        q.remove(150.0);
+        q.remove(123.0);
+
+        let expected_stddev = 8.698403429493382;
+        assert_close(q.stddev().unwrap(), expected_stddev, 0.00000000001);
+    }
 
     #[test]
     fn test_quantile() { 
