@@ -13,7 +13,7 @@
 Add this to your Cargo.toml:
 ```
 [dependencies]
-quantogram = "0.1"
+quantogram = "0.2"
 ```
 then you are good to go.
 
