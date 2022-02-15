@@ -40,6 +40,73 @@ impl HistogramBin {
     }
 }
 
+/// Internal structure for Half Sample Mode calculation.
+#[derive(Copy, Clone, Debug)]
+struct HalfSampleInterval {
+    /// Index of the first bin in rthe interval
+    pub start_index: usize,
+
+    /// Sample value for first bin.
+    pub start_sample: f64,
+
+    /// Count of the bins in the interval
+    pub bins: usize,
+
+    /// Sum of weights from all bins in the interval
+    pub cume_weight: f64,
+
+    /// Width of interval is the difference between the lowest bin sample value 
+    /// and the highest bin sample value in the interval.
+    pub width: f64
+}
+
+impl HalfSampleInterval {
+    pub fn new(index: usize, sample: f64, weight: f64) -> Self {
+        HalfSampleInterval {
+            start_index: index,
+            start_sample: sample,
+            bins: 1,
+            cume_weight: weight,
+            width: 0.0
+        }
+    }
+
+    pub fn empty() -> Self {
+        HalfSampleInterval {
+            start_index: 0,
+            start_sample: 0.0,
+            bins: 1,
+            cume_weight: 0.0,
+            width: 0.0
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.cume_weight == 0.0
+    }
+
+    pub fn add(&mut self, sample: f64, weight: f64) {
+        self.bins += 1;
+        self.cume_weight += weight;
+        self.width = sample - self.start_sample;
+    }
+
+    pub fn is_underweight(&self, minimum_weight: f64) -> bool {
+        self.cume_weight < minimum_weight
+    }
+
+    /// Check if this interval is denser than the other interval. 
+    pub fn is_denser_than(&self, other: &Self, minimum_weight: f64) -> bool {
+        if other.is_empty() && !self.is_empty() { true }
+        else if self.is_underweight(minimum_weight) { false }
+        else if other.is_underweight(minimum_weight) { true }
+        else if self.width < other.width { true }
+        else if self.width > other.width { false }
+        else { self.cume_weight > other.cume_weight }
+    }
+
+}
+
 /// Categorize numbers as negative, zero, positive, NAN or an infinity
 enum SampleCategory {
     Negative,
@@ -568,6 +635,100 @@ impl Quantogram {
         }
     }
 
+    /// Estimate the half-sample mode.
+    /// More resistant than the mode to outliers and contamination (noise). 
+    /// 
+    /// Based on the mode estimator by Robertson and Cryer (1974), and an 
+    /// algorithm described in "On a Fast, Robust Estimator of the Mode" by David Bickel and Rudolf Fruhwirth.
+    /// That algorithm is applied to raw samples, whereas this is applied 
+    /// to already histogrammed values.
+    /// 
+    /// Edge case: If fewer than five bins of data are present in the histogram,
+    /// the true mode will be returned, unless the data is multi-moded, in which case
+    /// None will be returned.
+    pub fn hsm(&self) -> Option<f64> {
+        if self.total_weight == 0.0 { None }
+        else {
+            let mut weights: Vec<f64> = Vec::new();
+            let mut samples: Vec<f64> = Vec::new();
+            for bin in self.fine_bins.values() {
+                samples.push(bin.sample);
+                weights.push(bin.weight);
+            }
+            let count = samples.len();
+            if count < 5 {
+                let modes = self.mode();
+                if modes.len() == 0 {
+                    return Some(modes[0]);
+                }
+                else {
+                    return None;
+                }
+            } 
+            let mut cume_target = self.total_weight / 2.0;
+            let mut start_index = 0;
+            let mut limit_index = samples.len();
+            let mut densest = HalfSampleInterval::empty();
+            while (limit_index - start_index) >= 2 { 
+                densest = HalfSampleInterval::empty();
+                for interval_start in start_index..limit_index {
+                    let mut current_interval = HalfSampleInterval::empty();
+                    for index in interval_start..limit_index {
+                        if current_interval.is_empty() {
+                            current_interval = HalfSampleInterval::new(index, samples[index], weights[index]);
+                        }
+                        else {
+                            current_interval.add(samples[index], weights[index]);
+                        }
+                        if current_interval.is_denser_than(&densest, cume_target) {
+                            densest = current_interval;
+                        }
+                        if !current_interval.is_underweight(cume_target) { 
+                            println!("HSM Interval: {:?}", current_interval);
+                            break; 
+                        }     
+                    }
+                }
+                start_index = densest.start_index;
+                limit_index = start_index + densest.bins;
+                cume_target = cume_target / 2.0;
+            }
+            match densest.bins {
+                0 => None,
+                1 => Some(samples[densest.start_index]),
+                2 => {
+                    // TODO: Instead of taking the weighted average of two points, should we take the maximum?
+                    let i = densest.start_index;
+                    let weight_sum = weights[i] + weights[i+1];
+                    if weight_sum <= 0.0 {
+                        None
+                    }
+                    else {
+                        let weighted_mean = (samples[i] * weights[i] + samples[i+1] * weights[i+1]) / weight_sum;
+                        Some(weighted_mean)
+                    }
+                },
+                3 => {
+                    // TODO: Instead of taking the weighted average of three points, should we take the maximum?
+                    let i = densest.start_index;
+                    let weight_sum = weights[i] + weights[i+1] + weights[i+2];
+                    if weight_sum <= 0.0 {
+                        None
+                    }
+                    else {
+                        let weighted_mean = (
+                            samples[i] * weights[i] 
+                          + samples[i+1] * weights[i+1]
+                          + samples[i+2] * weights[i+2]) 
+                          / weight_sum;
+                        Some(weighted_mean)
+                    }
+                },
+                _ => None
+            }
+        }
+    }
+
     /// Estimate the quantile for the inserted data.
     ///   For the minimum, use phi = 0.0.
     ///   For the median, use phi = 0.5. 
@@ -943,9 +1104,17 @@ impl Quantogram {
     fn increment_key_weight(map: &mut SkipMap<isize, HistogramBin>, key: isize, bucket_sample: f64, accurate_sample: f64, added_weight: f64) -> f64 {
         match map.get_mut(&key) {
             Some(bucket) => {
-                // When updating an existing bucket, always use the bucket_sample value, which is the midpoint value.
-                let new_bucket = HistogramBin::new(bucket_sample, bucket.weight + added_weight);
-                bucket.set(new_bucket);
+                // When updating an existing bucket, use the bucket_sample value, which is the midpoint value,
+                // unless the previous bucket used the same value as the accurate value.
+                let new_bucket:HistogramBin;
+                if bucket.sample == accurate_sample {
+                    new_bucket = HistogramBin::new(accurate_sample, bucket.weight + added_weight);
+                    bucket.set(new_bucket); 
+                }
+                else {
+                    new_bucket = HistogramBin::new(bucket_sample, bucket.weight + added_weight);
+                    bucket.set(new_bucket);                    
+                }
                 new_bucket.weight
             },
             None => {
@@ -1569,6 +1738,32 @@ mod tests {
         let data = vec![1.0,2.0,3.0,3.0,3.0,4.0,4.0,4.0,5.0,6.0];
         q.add_unweighted_samples(data.iter());
         assert_eq!(q.mode(), vec![3.0,4.0]); 
+    }
+
+    /// Verify that a false outlier mode at zero is accepted by mode but rejected by hsm.
+    #[test]
+    fn test_hsm() { 
+        let mut q = Quantogram::new();
+        let data = vec![
+            0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0, 
+            1.0,
+            2.0,  2.0,
+            3.0,
+            4.0,  4.0,  4.0,
+            5.0,  5.0,
+            6.0,  6.0,  6.0,  6.0,
+            7.0,  7.0,  7.0,
+            8.0,  8.0,  8.0,  8.0,
+            9.0,  9.0,  9.0,  9.0,  9.0,
+            10.0, 10.0, 10.0, 10.0, 10.0, 10.0,
+            11.0, 11.0, 11.0,
+            12.0, 12.0, 12.0,
+            13.0,
+            14.0
+        ];
+        q.add_unweighted_samples(data.iter());
+        assert_eq!(q.hsm(), Some(10.0)); 
+        assert_eq!(q.mode(), vec![0.0]); 
     }
 
     #[test]

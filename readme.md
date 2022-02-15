@@ -13,7 +13,7 @@
 Add this to your Cargo.toml:
 ```
 [dependencies]
-quantogram = "0.2"
+quantogram = "0.3"
 ```
 then you are good to go.
 
@@ -163,6 +163,7 @@ The range of maximum storage required goes from 25 KB for 2 bins to 8.2 MB for 1
  - **standard deviation**
  - **quantile**
  - **mode**
+ - **hsm** (half-sample mode)
  - **count**
 
 *Notes*: 
@@ -171,7 +172,8 @@ The range of maximum storage required goes from 25 KB for 2 bins to 8.2 MB for 1
  2. If only integer values are collected, the `mode` will be rounded to the nearest integer.
  3. If integer values in the range [-63,63] are used, a good value for mode will result. 
  4. If non-integer values are collected or integers outside this range, then the effect of non-uniform histogram bin widths will distort the `mode` and the anwswer will not be what you expect. Bins vary in size exponentially, so the `mode` will act like the mode of the log of the samples. This will skew the `mode` toward larger values, as larger numbers are part of larger bins.
- 5. Most rules of thumb related to the use of histograms to estimate the mode (like **Sturges' Rule** and **Scott's Rule**) use bin counts that are much lower than what is used by `Quantogram`. It might be better to rebin by consolidating multiple adjacent bins in order to compute the `mode`. 
+ 5. Most rules of thumb related to the use of histograms to estimate the **mode** (like **Sturges' Rule** and **Scott's Rule**) use bin counts that are much lower than what is used by `Quantogram`. It might be better to rebin by consolidating multiple adjacent bins in order to compute the `mode`. 
+ 6. As an alternative to the mode, try the **half-sample mode**, `Quantogram::hsm`. This applies a generalized form of the **Robertson-Cryer (1974)** *half-sample mode estimator* to histogrammed data instead of the raw samples. It has been generalized from the algorithm by **David Bickel** to apply to weighted samples. The *half-sample mode* is good at ignoring outliers and contamination.
 
 **Inverse Quantile**. Lookup the quantile at which a given value falls using the `quantile_at` function.
 
@@ -183,7 +185,9 @@ By compressing the dynamic range of recorded values, less storage is required an
 
 **Special handling of Integers**. So long as only integers (samples with no fractional component) are added to the collection, requests for a quantile will round to the nearest integer.
 
-**Exact values for sparse bins**. If only one value has been added to a certain bin, instead of the midpoint between the bin's lower and upper value being used, the exact sample value will be used.
+**Exact values for sparse bins**. If only one value has been added to a certain bin, instead of the midpoint between the bin's lower and upper value being used, the exact sample value will be used. 
+
+*Changed in version 0.3.0*: If repeated additions of the same value are made and all match this accurate sample value, the accurate sample will be retained. The first differing value to be added to that bin will cause the bin's midpoint value to be used instead.
 
 ## Categorizing the Quantogram Algorithm
 
