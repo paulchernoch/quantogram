@@ -13,7 +13,7 @@
 Add this to your Cargo.toml:
 ```
 [dependencies]
-quantogram = "0.3"
+quantogram = "0.4"
 ```
 then you are good to go.
 
@@ -153,7 +153,7 @@ The range of maximum storage required goes from 25 KB for 2 bins to 8.2 MB for 1
 
 *Warning*: If the minimum or maximum value is removed, subsequent requests for the minimum or maximum (until a new extreme sample is added) may return an incorrect value. 
 
-**Implemented Statistics**. `Quantogram` provides these basic statistics: 
+**Descriptive Statistics**. `Quantogram` provides these basic statistics: 
 
  - **min**
  - **max**
@@ -162,6 +162,7 @@ The range of maximum storage required goes from 25 KB for 2 bins to 8.2 MB for 1
  - **variance**
  - **standard deviation**
  - **quantile**
+ - **q1, q3** (1st and 3rd quartiles)
  - **mode**
  - **hsm** (half-sample mode)
  - **count**
@@ -174,6 +175,18 @@ The range of maximum storage required goes from 25 KB for 2 bins to 8.2 MB for 1
  4. If non-integer values are collected or integers outside this range, then the effect of non-uniform histogram bin widths will distort the `mode` and the anwswer will not be what you expect. Bins vary in size exponentially, so the `mode` will act like the mode of the log of the samples. This will skew the `mode` toward larger values, as larger numbers are part of larger bins.
  5. Most rules of thumb related to the use of histograms to estimate the **mode** (like **Sturges' Rule** and **Scott's Rule**) use bin counts that are much lower than what is used by `Quantogram`. It might be better to rebin by consolidating multiple adjacent bins in order to compute the `mode`. 
  6. As an alternative to the mode, try the **half-sample mode**, `Quantogram::hsm`. This applies a generalized form of the **Robertson-Cryer (1974)** *half-sample mode estimator* to histogrammed data instead of the raw samples. It has been generalized from the algorithm by **David Bickel** to apply to weighted samples. The *half-sample mode* is good at ignoring outliers and contamination.
+
+**Measures of Dispersion**
+
+These additional statistics are implemented which are measures of dispersion:
+
+ - **range** (spread between min and max)
+ - **iqr** (interquartile range: Q3 - Q1)        
+ - **quartile_deviation** (semi-interquartile range, half of iqr))
+ - **coeff_of_range** ((max - min) / (max + min))
+ - **coeff_of_quartile_dev** ((Q3-Q1)/(Q3+Q1))
+ - **coeff_of_stddev** (standard deviation divided by mean)
+ - **coeff_of_variation**
 
 **Inverse Quantile**. Lookup the quantile at which a given value falls using the `quantile_at` function.
 

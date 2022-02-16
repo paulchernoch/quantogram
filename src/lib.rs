@@ -522,7 +522,14 @@ impl Quantogram {
 
     // ////////////////////////////
     //                           //
-    //          Measures         //
+    //      Basic Measures       //
+    //                           //
+    //   mean min max count      //
+    //   median variance stddev  //
+    //   mode hsm                //
+    //   quantile quantile_at    //
+    //   fussy_quantile          //
+    //   finite zero nan         //
     //                           //
     // ////////////////////////////
 
@@ -898,6 +905,108 @@ impl Quantogram {
         }
     }
 
+    // ////////////////////////////
+    //                           //
+    //   Measures of Dispersion  //
+    //                           //
+    //   range q1 q3 iqr         //
+    //   quartile_deviation      //
+    //   coeff_of_range          //
+    //   coeff_of_quartile_dev   //
+    //   coeff_of_stddev         //
+    //   coeff_of_variation      //
+    //                           //
+    // ////////////////////////////
+
+    /// Range between the highest and lowest values sampled.
+    pub fn range(&self) -> Option<f64> {
+        match (self.max(), self.min()) {
+            (Some(max), Some(min)) => Some(max - min),
+            _ => None
+        }
+    }
+
+    /// Sample at the first quartile.
+    pub fn q1(&self) -> Option<f64> { self.quantile(0.25) }
+
+    /// Sample at the third quartile.
+    pub fn q3(&self) -> Option<f64> { self.quantile(0.75) }
+
+    /// Inter quartile range, which is (Q3 - Q1)
+    pub fn iqr(&self) -> Option<f64> {
+        match (self.q3(), self.q1()) {
+            (Some(q3), Some(q1)) => Some(q3 - q1),
+            _ => None
+        }  
+    }
+
+    /// Quartile deviation or semi-interquartile range, which is (Q3 - Q1) / 2
+    pub fn quartile_deviation(&self) -> Option<f64> {
+        match (self.q3(), self.q1()) {
+            (Some(q3), Some(q1)) => Some((q3 - q1) / 2.0),
+            _ => None
+        }  
+    }
+
+    /// Coefficient of range. 
+    /// 
+    /// ```text
+    ///                        max - min
+    ///    coeff of range =  ------------
+    ///                        max + min
+    /// ```
+    pub fn coeff_of_range(&self) -> Option<f64> {
+        match (self.max(), self.min()) {
+            (Some(max), Some(min)) => {
+                let sum = max + min;
+                if sum == 0.0 { None }
+                else { Some((max - min) / sum) }
+            },
+            _ => None
+        }
+    }
+
+    /// Coefficient of quartile deviation, which measures the relative spread between 
+    /// the first and third quartiles.
+    /// 
+    /// ```text
+    ///                                    q3 - q1
+    ///    coeff of quartile deviation =  ---------
+    ///                                    q3 + q1
+    /// ```    
+    pub fn coeff_of_quartile_dev(&self) -> Option<f64> {
+        match (self.q3(), self.q1()) {
+            (Some(q3), Some(q1)) => {
+                let sum = q3 + q1;
+                if sum == 0.0 { None }
+                else { Some((q3 - q1) / sum) }
+            },
+            _ => None
+        }
+    }
+
+    /// Coefficient of standard deviation.
+    /// 
+    /// This give the standard deviation divided by the mean.
+    pub fn coeff_of_stddev(&self) -> Option<f64> {
+        match (self.stddev(), self.mean()) {
+            (Some(stddev), Some(mean)) => {
+                if mean == 0.0 { None }
+                else { Some(stddev / mean) }
+            },
+            _ => None
+        }
+    }
+
+    /// Coefficient of variation.
+    /// 
+    /// This give the standard deviation divided by the mean expressed as a percentage.
+    pub fn coeff_of_variation(&self) -> Option<f64> {
+        match self.coeff_of_stddev() {
+            Some(coeff) => Some(coeff * 100.0),
+            _ => None
+        }
+    }
 
     // ////////////////////////////
     //                           //
@@ -1869,6 +1978,61 @@ mod tests {
         q.add_weighted(0.0, 6.0);
 
         assert_eq!(q.median().unwrap(), 2.0); 
+    }
+
+    #[test]
+    fn test_coeff_of_range() { 
+        let mut q = Quantogram::new();
+        q.add_unweighted_samples(vec![
+            123, 150, 85, 86, 100, 76, 81, 93, 84, 99, 71, 69, 93, 85, 81, 87, 89
+        ].iter());
+
+        let expected_coeff = (150.0 - 69.0)/(150.0 + 69.0);
+        assert_close(q.coeff_of_range().unwrap(), expected_coeff, 0.00000000001);
+    }
+
+    #[test]
+    fn test_coeff_of_quartile_deviation() { 
+        let mut q = Quantogram::new();
+        q.add_unweighted_samples(vec![
+            1,2,3,4,4,5,6,7,7,8,9,10,10,11,12,13
+        ].iter());
+
+        let expected_coeff = (10.0 - 4.0)/(10.0 + 4.0);
+        assert_close(q.coeff_of_quartile_dev().unwrap(), expected_coeff, 0.00000000001);
+    }
+
+    #[test]
+    fn test_quartiles() { 
+        let mut q = Quantogram::new();
+        q.add_unweighted_samples(vec![
+            1,2,3,4,4,5,6,7,7,8,9,10,10,11,12,13
+        ].iter());
+
+        assert_close(q.q1().unwrap(), 4.0, 0.00000000001);
+        assert_close(q.q3().unwrap(), 10.0, 0.00000000001);
+    }
+
+    #[test]
+    fn test_coeff_of_stddev() { 
+        let mut q = Quantogram::new();
+        q.add_unweighted_samples(vec![
+            85, 86, 100, 76, 81, 93, 84, 99, 71, 69, 93, 85, 81, 87, 89
+        ].iter());
+
+        let expected_stddev =  8.698403429493382;
+        let expected_mean   = 85.266666666666667;
+        assert_close(
+            q.coeff_of_stddev().unwrap(), 
+            expected_stddev / expected_mean, 
+            0.00000000001
+        );
+        // Also test the coeff_of_variation
+        assert_close(
+            q.coeff_of_variation().unwrap(), 
+            100.0 * expected_stddev / expected_mean, 
+            0.00000000001
+        );
     }
 
     #[test]
