@@ -1,6 +1,6 @@
 [package]
 name = "quantogram"
-version = "0.4.1"
+version = "0.4.2"
 description = "Approximate quantiles using histograms with logarithmically sized bins to guarantee worst case absolute relative error."
 keywords = ["quantile", "median", "statistics", "approximation"]
 categories = ["mathematics"]

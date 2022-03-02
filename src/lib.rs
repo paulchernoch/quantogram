@@ -691,7 +691,7 @@ impl Quantogram {
                             densest = current_interval;
                         }
                         if !current_interval.is_underweight(cume_target) { 
-                            println!("HSM Interval: {:?}", current_interval);
+                            // println!("HSM Interval: {:?}", current_interval);
                             break; 
                         }     
                     }

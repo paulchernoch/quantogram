@@ -1,5 +1,10 @@
 # Quantogram Release Notes
 
+
+**Release 0.4.2**:
+
+Remove debug logging statement from hsm.
+
 **Release 0.4.1**:
 
 Fix half-sample mode (hsm) edge case where there is no true mode.
