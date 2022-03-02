@@ -1,5 +1,9 @@
 # Quantogram Release Notes
 
+**Release 0.4.1**:
+
+Fix half-sample mode (hsm) edge case where there is no true mode.
+
 **Release 0.4.0**:
 
 Added these basic statistics:
