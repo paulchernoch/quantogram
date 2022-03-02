@@ -665,7 +665,7 @@ impl Quantogram {
             let count = samples.len();
             if count < 5 {
                 let modes = self.mode();
-                if modes.len() == 0 {
+                if modes.len() > 0 {
                     return Some(modes[0]);
                 }
                 else {
