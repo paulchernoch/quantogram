@@ -1,6 +1,10 @@
 # Quantogram Release Notes
 
 
+**Release 0.4.3**:
+
+Speed up hsm (half-sample mode), cache its values for reuse and also expose it as a function that can be called even without a Quantogram. The cache makes the computation 9x faster than before once the number of samples exceeds 1000.
+
 **Release 0.4.2**:
 
 Remove debug logging statement from hsm.

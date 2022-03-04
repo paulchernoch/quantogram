@@ -1,8 +1,11 @@
+use std::cell::RefCell;
 use std::ops::Bound::{Included,Excluded};
 use std::fmt::{Formatter,Debug,Result};
 use float_extras::f64::frexp;
 use std::convert::Into;
 use skiplist::SkipMap;
+mod half_sample_mode;
+use half_sample_mode::{HalfSampleModeCache};
 
 
 /// A bin to be used inside a Histogram with a midpoint value and a weight.
@@ -38,73 +41,6 @@ impl HistogramBin {
         self.weight = copy_from.weight;
         self.validate();
     }
-}
-
-/// Internal structure for Half Sample Mode calculation.
-#[derive(Copy, Clone, Debug)]
-struct HalfSampleInterval {
-    /// Index of the first bin in rthe interval
-    pub start_index: usize,
-
-    /// Sample value for first bin.
-    pub start_sample: f64,
-
-    /// Count of the bins in the interval
-    pub bins: usize,
-
-    /// Sum of weights from all bins in the interval
-    pub cume_weight: f64,
-
-    /// Width of interval is the difference between the lowest bin sample value 
-    /// and the highest bin sample value in the interval.
-    pub width: f64
-}
-
-impl HalfSampleInterval {
-    pub fn new(index: usize, sample: f64, weight: f64) -> Self {
-        HalfSampleInterval {
-            start_index: index,
-            start_sample: sample,
-            bins: 1,
-            cume_weight: weight,
-            width: 0.0
-        }
-    }
-
-    pub fn empty() -> Self {
-        HalfSampleInterval {
-            start_index: 0,
-            start_sample: 0.0,
-            bins: 1,
-            cume_weight: 0.0,
-            width: 0.0
-        }
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.cume_weight == 0.0
-    }
-
-    pub fn add(&mut self, sample: f64, weight: f64) {
-        self.bins += 1;
-        self.cume_weight += weight;
-        self.width = sample - self.start_sample;
-    }
-
-    pub fn is_underweight(&self, minimum_weight: f64) -> bool {
-        self.cume_weight < minimum_weight
-    }
-
-    /// Check if this interval is denser than the other interval. 
-    pub fn is_denser_than(&self, other: &Self, minimum_weight: f64) -> bool {
-        if other.is_empty() && !self.is_empty() { true }
-        else if self.is_underweight(minimum_weight) { false }
-        else if other.is_underweight(minimum_weight) { true }
-        else if self.width < other.width { true }
-        else if self.width > other.width { false }
-        else { self.cume_weight > other.cume_weight }
-    }
-
 }
 
 /// Categorize numbers as negative, zero, positive, NAN or an infinity
@@ -339,7 +275,10 @@ pub struct Quantogram {
     log_of_growth : f64,
 
     /// Cache of mode candidates for computing the mode.
-    mode_cache : ModeCache
+    mode_cache : ModeCache,
+
+    /// Cache for use with hsm (half-sample mode). 
+    hsm_cache : RefCell<HalfSampleModeCache>
 }
 
 impl Quantogram {
@@ -386,7 +325,8 @@ impl Quantogram {
             negative_coarse_bins : SkipMap::with_capacity(254),
             fine_bins : SkipMap::with_capacity(17641),
             log_of_growth : growth.ln(),
-            mode_cache : ModeCache::new()
+            mode_cache : ModeCache::new(),
+            hsm_cache : RefCell::new(HalfSampleModeCache::new_default())
         };
         q.memoize_growth_bin_power();
         q
@@ -441,10 +381,16 @@ impl Quantogram {
             // so the capacity can be reduced. 
             fine_bins : SkipMap::with_capacity(((largest_power - smallest_power + 1)*35 + 1) as usize),
             log_of_growth : growth.ln(),
-            mode_cache : ModeCache::new()
+            mode_cache : ModeCache::new(),
+            hsm_cache : RefCell::new(HalfSampleModeCache::new_default())
         };
         q.memoize_growth_bin_power();
         q
+    }
+
+    pub fn replace_hsm_cache(&mut self, new_cache: HalfSampleModeCache) {
+        self.hsm_cache = RefCell::new(new_cache);
+        self.hsm_cache.borrow_mut().clear();
     }
 
     // ////////////////////////////
@@ -469,6 +415,7 @@ impl Quantogram {
     /// If the cumulative weight for the bin holding that sample goes negative, 
     /// the call panics.
     pub fn add_weighted(&mut self, sample: f64, weight: f64) -> f64 {
+        self.hsm_cache.borrow_mut().record(sample);
         let bounded_sample = self.over_or_underflow(sample);
         let adjusted_fine_weight;
         self.adjust_aggregates(bounded_sample, weight);
@@ -653,6 +600,8 @@ impl Quantogram {
     /// Edge case: If fewer than five bins of data are present in the histogram,
     /// the true mode will be returned, unless the data is multi-moded, in which case
     /// None will be returned.
+    /// 
+    /// NOTE: 
     pub fn hsm(&self) -> Option<f64> {
         if self.total_weight == 0.0 { None }
         else {
@@ -662,77 +611,12 @@ impl Quantogram {
                 samples.push(bin.sample);
                 weights.push(bin.weight);
             }
-            let count = samples.len();
-            if count < 5 {
-                let modes = self.mode();
-                if modes.len() > 0 {
-                    return Some(modes[0]);
-                }
-                else {
-                    return None;
-                }
-            } 
-            let mut cume_target = self.total_weight / 2.0;
-            let mut start_index = 0;
-            let mut limit_index = samples.len();
-            let mut densest = HalfSampleInterval::empty();
-            while (limit_index - start_index) >= 2 { 
-                densest = HalfSampleInterval::empty();
-                for interval_start in start_index..limit_index {
-                    let mut current_interval = HalfSampleInterval::empty();
-                    for index in interval_start..limit_index {
-                        if current_interval.is_empty() {
-                            current_interval = HalfSampleInterval::new(index, samples[index], weights[index]);
-                        }
-                        else {
-                            current_interval.add(samples[index], weights[index]);
-                        }
-                        if current_interval.is_denser_than(&densest, cume_target) {
-                            densest = current_interval;
-                        }
-                        if !current_interval.is_underweight(cume_target) { 
-                            // println!("HSM Interval: {:?}", current_interval);
-                            break; 
-                        }     
-                    }
-                }
-                start_index = densest.start_index;
-                limit_index = start_index + densest.bins;
-                cume_target = cume_target / 2.0;
-            }
-            match densest.bins {
-                0 => None,
-                1 => Some(samples[densest.start_index]),
-                2 => {
-                    // TODO: Instead of taking the weighted average of two points, should we take the maximum?
-                    let i = densest.start_index;
-                    let weight_sum = weights[i] + weights[i+1];
-                    if weight_sum <= 0.0 {
-                        None
-                    }
-                    else {
-                        let weighted_mean = (samples[i] * weights[i] + samples[i+1] * weights[i+1]) / weight_sum;
-                        Some(weighted_mean)
-                    }
-                },
-                3 => {
-                    // TODO: Instead of taking the weighted average of three points, should we take the maximum?
-                    let i = densest.start_index;
-                    let weight_sum = weights[i] + weights[i+1] + weights[i+2];
-                    if weight_sum <= 0.0 {
-                        None
-                    }
-                    else {
-                        let weighted_mean = (
-                            samples[i] * weights[i] 
-                          + samples[i+1] * weights[i+1]
-                          + samples[i+2] * weights[i+2]) 
-                          / weight_sum;
-                        Some(weighted_mean)
-                    }
-                },
-                _ => None
-            }
+
+            // Cache may be updated because of interior mutability.
+            self.hsm_cache.borrow_mut().hsm(&samples, &weights, self.total_weight)
+            
+            // If we wanted to bypass the cache, do it this way:
+            // half_sample_mode(&samples, &weights, self.total_weight)
         }
     }
 
@@ -1511,7 +1395,9 @@ pub struct QuantogramBuilder {
     /// A sample whose magnitude is more than this power of two will overflow and be considered +/- Infinity.
     /// Must be in the range [-126,127] but also be more than smallest_power.
     /// Defaults to +127.
-    largest_power: isize
+    largest_power: isize,
+
+    hsm_cache: Option<HalfSampleModeCache>
 }
 
 impl QuantogramBuilder {
@@ -1523,14 +1409,27 @@ impl QuantogramBuilder {
             bins_per_doubling: 35,
             growth: 1.02,
             smallest_power: -126,
-            largest_power: 127
+            largest_power: 127,
+            hsm_cache: None
         }
     }
 
     /// Build a Quantogram using the collected configuration values.
     pub fn build(self) -> Quantogram {
-        Quantogram::with_configuration(self.growth, self.bins_per_doubling, self.smallest_power, self.largest_power)
+        let mut q = Quantogram::with_configuration(self.growth, self.bins_per_doubling, self.smallest_power, self.largest_power);
+        match self.hsm_cache {
+            Some(cache) => { q.replace_hsm_cache(cache); },
+            None => (),
+        }
+        q
     }
+
+    pub fn with_hsm_cache(mut self, hsm_cache: &HalfSampleModeCache)-> Self {
+        let mut cleared_cache = hsm_cache.clone();
+        cleared_cache.clear();
+        self.hsm_cache = Some(cleared_cache);
+        self
+    } 
 
     /// Configure the underflow of samples.
     /// A sample whose magnitude has a power of two less than the given values will be set to zero.

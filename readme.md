@@ -175,6 +175,11 @@ The range of maximum storage required goes from 25 KB for 2 bins to 8.2 MB for 1
  4. If non-integer values are collected or integers outside this range, then the effect of non-uniform histogram bin widths will distort the `mode` and the anwswer will not be what you expect. Bins vary in size exponentially, so the `mode` will act like the mode of the log of the samples. This will skew the `mode` toward larger values, as larger numbers are part of larger bins.
  5. Most rules of thumb related to the use of histograms to estimate the **mode** (like **Sturges' Rule** and **Scott's Rule**) use bin counts that are much lower than what is used by `Quantogram`. It might be better to rebin by consolidating multiple adjacent bins in order to compute the `mode`. 
  6. As an alternative to the mode, try the **half-sample mode**, `Quantogram::hsm`. This applies a generalized form of the **Robertson-Cryer (1974)** *half-sample mode estimator* to histogrammed data instead of the raw samples. It has been generalized from the algorithm by **David Bickel** to apply to weighted samples. The *half-sample mode* is good at ignoring outliers and contamination.
+ 7. The **half-sample mode** (`hsm`) as implemented is worse than quadratic in performance (possibly `O(N² Log N)`). To compensate for this, a cache has been added that often recalculates the `hsm` over a subset of the data in the neighborhood of the previously calculated mode. 
+    - If new values are added that are within this neighborhood, partial recalc will be done. If the Quantogram uses buckets with growth of 1.02 (for 1% quantization error) then the default neighborhood of 70 bins covers the range `[1/2 x mode, 2 x mode]`. If a distribution has a well-defined peak, this core region should often include the newly added sample and permit the optimization.
+    - If new values are outside the neighborhood, it is unlikely that they will move the mode. Permit reuse of previously computed mode without any recalc for a dozen samples in a row before forcing a full recalc. 
+    - If the number of buckets grows too much or the change in total weight is too much, a full recalc will be done.
+    - If there are fewer than 64 bins, perform a full recalc. This enables a proper and accurate mode to arise from the data before the caching kicks in.
 
 **Measures of Dispersion**
 
