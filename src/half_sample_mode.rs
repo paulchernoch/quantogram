@@ -1,4 +1,5 @@
 use std::cmp::Ordering;
+use super::agreement::Agreement;
 
 // Contains: 
 // 
@@ -204,6 +205,9 @@ pub struct HalfSampleModeCache {
     /// Most recent sample added to date.
     latest_sample: f64,
 
+    /// Alternate mode estimate (thst is faster to compute)
+    latest_proxy: f64,
+
     /// Number of bins present during previous full recalculation of mode.
     bins: usize,
 
@@ -223,7 +227,14 @@ pub struct HalfSampleModeCache {
 
     outside_neighborhood_counter: usize,
 
-    cache_hits: usize
+    cache_hits: usize,
+
+    /// Measures the agreement of the mode and hsm.
+    /// Currently not useful, as those two measures are not in good enough agreement (based on experiment)
+    /// to permit mode to be used in place of hsm. The goal is to find a less expensive estimate of mode (a proxy) than
+    /// hsm, track its agreement, and if the agreement after 1,000 iterations is good, to 
+    /// swap in use of the proxy to improve performance.
+    agreement: Agreement
 }
 
 impl HalfSampleModeCache {
@@ -231,6 +242,7 @@ impl HalfSampleModeCache {
         HalfSampleModeCache {
             mode: None,
             latest_sample: f64::NAN,
+            latest_proxy: f64::NAN,
             bins: 0,
             total_weight: 0.0,
             neighborhood: neighborhood,
@@ -238,7 +250,8 @@ impl HalfSampleModeCache {
             allowed_weight_change_fraction: allowed_weight_change_fraction,
             allowed_outside_neighborhood: 12,
             outside_neighborhood_counter: 0,
-            cache_hits: 0
+            cache_hits: 0,
+            agreement: Agreement::new()
         }
     }
 
@@ -246,6 +259,7 @@ impl HalfSampleModeCache {
         HalfSampleModeCache {
             mode: None,
             latest_sample: f64::NAN,
+            latest_proxy: f64::NAN,
             bins: 0,
             total_weight: 0.0,
             // A neighborhood of 70 is chosen so that if a growth factor of 1.02 is used
@@ -257,23 +271,38 @@ impl HalfSampleModeCache {
             allowed_weight_change_fraction: 0.01,
             allowed_outside_neighborhood: 12,
             outside_neighborhood_counter: 0,
-            cache_hits: 0
+            cache_hits: 0,
+            agreement: Agreement::new()
         }
     }
 
     /// Record the latest sample added to data.
     /// This must be called prior to calling hsm so that we know if the new value is near the prior mode.
-    pub fn record(&mut self, sample: f64) {
+    pub fn record(&mut self, sample: f64, mode_proxy: f64) {
         self.latest_sample = sample;
+        self.latest_proxy = mode_proxy;
     }
 
     pub fn hits(&self) -> usize { self.cache_hits }
+
+    /// Assumes that latest_proxy was set by a call to record(), 
+    /// then mode was set in one of the recalc methods.
+    fn update_agreement(&mut self) {
+        if self.latest_proxy.is_finite() && self.mode.is_some() && self.latest_proxy.is_finite() {
+            self.agreement.add(self.mode.unwrap(), self.latest_proxy);
+            // Prevent reuse of the same proxy value; it will skew the results.
+            self.latest_proxy = f64::NAN;
+        }
+    }
 
     fn full_recalc(&mut self, samples: &[f64], weights: &[f64], total_weight: f64) -> Option<f64> {
         self.bins = samples.len();
         self.total_weight = total_weight;
         self.mode = half_sample_mode(samples, weights, total_weight);
         self.outside_neighborhood_counter = 0;
+
+        self.update_agreement();
+
         self.mode
     }
 
@@ -328,6 +357,9 @@ impl HalfSampleModeCache {
         else { prev_mode_position + half_neighborhood };
 
         self.mode = half_sample_mode(&samples[start_index..stop_index], &weights[start_index..stop_index], total_weight);
+
+        self.update_agreement();
+
         self.mode
     }
 
@@ -402,6 +434,7 @@ impl HalfSampleModeCache {
 #[cfg(test)]
 mod tests {
     use std::time::{Duration, Instant};
+    use crate::{Quantogram, QuantogramBuilder};
     use super::*;
 
     #[test]
@@ -446,17 +479,19 @@ mod tests {
         let mut weight_sum = 0.0;
         let mut cache = HalfSampleModeCache::new_default();
         let start_time = Instant::now();
+        let mut q = QuantogramBuilder::new().with_error(0.01).build();
         for i in 1..=iterations {
             let error = start_error / (i as f64).sqrt();
             let sign = if golden_ratio_sequence(i) < 0.3 { -1.0 } else { 1.0 };
             let next_value = true_value + sign * error;
             // Must ensure values remain sorted.
             insert_sorted(next_value, &mut values);
+            q.add(next_value);
             // values.push(next_value);
             weights.push(1.0);
             weight_sum += 1.0;
             if use_cache {
-                cache.record(next_value);
+                cache.record(next_value, next_value);
                 let _mode = cache.hsm(&values, &weights, weight_sum);
             }
             else {

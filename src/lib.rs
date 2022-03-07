@@ -6,6 +6,7 @@ use std::convert::Into;
 use skiplist::SkipMap;
 mod half_sample_mode;
 use half_sample_mode::{HalfSampleModeCache};
+mod agreement;
 
 
 /// A bin to be used inside a Histogram with a midpoint value and a weight.
@@ -415,10 +416,10 @@ impl Quantogram {
     /// If the cumulative weight for the bin holding that sample goes negative, 
     /// the call panics.
     pub fn add_weighted(&mut self, sample: f64, weight: f64) -> f64 {
-        self.hsm_cache.borrow_mut().record(sample);
         let bounded_sample = self.over_or_underflow(sample);
         let adjusted_fine_weight;
         self.adjust_aggregates(bounded_sample, weight);
+        let mut adjusted_mode = false;
         match SampleCategory::categorize(bounded_sample) {
             SampleCategory::Positive => {
                 self.positive_weight += weight;
@@ -427,12 +428,16 @@ impl Quantogram {
                 self.adjust_mode(fine_key, fine_low, fine_midpoint, fine_high, adjusted_fine_weight);
                 let (coarse_key, coarse_midpoint) = Self::get_coarse_key_with_midpoint(bounded_sample).unwrap();
                 Self::increment_key_weight(&mut self.positive_coarse_bins, coarse_key, coarse_midpoint, sample, weight);
+
+                adjusted_mode = true;
             },
             SampleCategory::Zero => {
                 self.zero_weight += weight;
                 let (fine_key, fine_low, fine_midpoint, fine_high) = self.get_fine_key_with_midpoint(bounded_sample, self.growth, self.bins_per_doubling).unwrap();
                 adjusted_fine_weight = Self::increment_key_weight(&mut self.fine_bins, fine_key, fine_midpoint, sample, weight); 
                 self.adjust_mode(fine_key, fine_low, fine_midpoint, fine_high, adjusted_fine_weight);
+
+                adjusted_mode = true;
             },
             SampleCategory::Negative => {
                 self.negative_weight += weight;
@@ -441,6 +446,8 @@ impl Quantogram {
                 self.adjust_mode(fine_key, fine_low, fine_midpoint, fine_high, adjusted_fine_weight);
                 let (coarse_key, coarse_midpoint) = Self::get_coarse_key_with_midpoint(bounded_sample).unwrap();
                 Self::increment_key_weight(&mut self.negative_coarse_bins, coarse_key, coarse_midpoint, sample, weight);
+
+                adjusted_mode = true;
             },
             SampleCategory::NotANumber => {
                 self.nan_weight += weight;
@@ -454,6 +461,14 @@ impl Quantogram {
                 self.minus_ininity_weight += weight;
                 adjusted_fine_weight = self.minus_ininity_weight;
             }
+        }
+        if adjusted_mode {
+            let modes = self.mode();
+            let mode = if modes.len() >= 1 { modes[0] } else { f64::NAN };
+            self.hsm_cache.borrow_mut().record(sample, mode);
+        }
+        else {
+            self.hsm_cache.borrow_mut().record(sample, f64::NAN);
         }
         adjusted_fine_weight
     }
