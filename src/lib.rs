@@ -733,7 +733,7 @@ impl Quantogram {
     /// queried value is not finite.
     pub fn quantile_at(&self, value: f64) -> Option<(f64,f64)> {
         let min_opt = self.min();
-        if min_opt.is_none() {
+        if min_opt.is_none() || !value.is_finite() {
             return None;
         } 
         let min = min_opt.unwrap();
@@ -2066,6 +2066,13 @@ mod tests {
         q.remove(10.0);
         q.remove(20.0);
         assert_eq!(q.mean().unwrap(), 40.0);
+    }
+
+    #[test]
+    fn quantile_at_nan() {
+        let mut q = Quantogram::new();
+        q.add(10.0);
+        assert!(q.quantile_at(f64::NAN).is_none()); 
     }
 
 }
